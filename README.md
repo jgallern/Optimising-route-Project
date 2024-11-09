@@ -2,14 +2,14 @@
 
 ## 1. Formal modelling (not graded)
 
-- [ ] Present the context
-    - [ ] Who are we?
-    - [ ] What we want to do?
-    - [ ] Why?
+- [x] Present the context
+    - [x] Who are we?
+    - [x] What we want to do?
+    - [x] Why?
 
-- [ ] Present the problem
-    - [ ] Parameter to take as input
-    - [ ] What to return
+- [x] Present the problem
+    - [x] Parameter to take as input
+    - [x] What to return
 
 - [ ] Extract the theoratical properties that we'll use and formalize them (mostly about complexity)
     - [ ] Complexity
