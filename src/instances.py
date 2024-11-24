@@ -44,12 +44,3 @@ class instances:
         plt.scatter(self.customer_df['XCOORD.'].iloc[0], self.customer_df['YCOORD.'].iloc[0], color='red')  
         plt.title("map of " + self.name)
 
-test1 = instances("./solomon_instances/c101.txt")
-test2 = instances("./solomon_instances/r102.txt")
-test3 = instances("./solomon_instances/rc103.txt")
-test1.plot()
-test2.plot()
-test3.plot()
-plt.show()
-
-
