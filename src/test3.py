@@ -111,34 +111,36 @@ class VRPTWSolution:
         self.routes = self.generate_initial_solution()
 
     def generate_initial_solution(self):
+        """
+        Generate an initial solution by prioritizing capacity utilization and minimizing trucks used.
+        """
         unvisited = set(self.customers[1:])
         trucks = []
         for truck_id in range(self.max_trucks):
             truck = Truck(truck_id, self.truck_capacity, self.depot.id)
             while unvisited:
-                nearest_customer, nearest_distance = None, float('inf')
                 current_location = self.customers[truck.route[-1]]
-                for customer in unvisited:
-                    if truck.can_visit(customer, current_location):
-                        distance = calculate_distance(current_location, customer)
-                        if distance < nearest_distance:
-                            nearest_customer, nearest_distance = customer, distance
-                if nearest_customer:
-                    truck.visit(nearest_customer, current_location)
-                    truck.route.append(nearest_customer.id)
-                    unvisited.remove(nearest_customer)
-                else:
+                feasible_customers = [
+                    customer for customer in unvisited if truck.can_visit(customer, current_location)
+                ]
+                if not feasible_customers:
                     break
+                # Sort by earliest due date to prioritize harder-to-fit customers
+                feasible_customers.sort(key=lambda c: (c.due_date, -c.demand))
+                best_customer = feasible_customers[0]
+                truck.visit(best_customer, current_location)
+                truck.route.append(best_customer.id)
+                unvisited.remove(best_customer)
             if len(truck.route) > 1:
                 truck.route.append(self.depot.id)
                 trucks.append(truck)
+                if not unvisited:
+                    break  # Stop if all customers are visited
         return trucks
 
-    def calculate_cost(self, alpha=1000, beta=1):
+    def calculate_cost(self, alpha=10000, beta=1):
         """
-        Calculate the cost of the solution using a linear combination of the number of trucks and total distance.
-        This allows us to minimize the number of trucks used while minimizing the total distance traveled.
-        The weight of the trucks are higher than the weight of the distance to minimize the number of trucks used.
+        Calculate the cost of the solution with high emphasis on minimizing the number of trucks.
         :param alpha: INT weight for the number of trucks
         :param beta: INT weight for the total distance
         :return: INT cost of the solution
@@ -155,29 +157,34 @@ class VRPTWSolution:
         return sum(truck.calculate_route_distance(self.customers) for truck in self.routes)
 
     def neighbor_solution(self):
+        """
+        Generate a neighbor solution with an emphasis on merging routes.
+        """
         new_routes = [Truck(t.id, t.capacity, t.route[0]) for t in self.routes]
         for i, truck in enumerate(self.routes):
             new_routes[i].route = truck.route[:]
             new_routes[i].remaining_capacity = truck.remaining_capacity
 
-        # Modify the route and validate time windows
+        # Attempt to merge two routes
+        if len(new_routes) > 1:
+            truck1, truck2 = random.sample(new_routes, 2)
+            if len(truck2.route) > 2:  # Ensure truck2 has customers to move
+                for customer_id in truck2.route[1:-1]:  # Exclude depot
+                    customer = self.customers[customer_id]
+                    if truck1.remaining_capacity >= customer.demand:
+                        current_location = self.customers[truck1.route[-1]]
+                        if truck1.can_visit(customer, current_location):
+                            # Move customer to truck1
+                            truck2.route.remove(customer_id)
+                            truck1.route.insert(-1, customer_id)  # Add before depot
+                            truck1.remaining_capacity -= customer.demand
+                            truck2.remaining_capacity += customer.demand
+
+        # Apply small local change (2-Opt) to improve routes
         selected_truck = random.choice(new_routes)
         if len(selected_truck.route) > 3:
             i, j = sorted(random.sample(range(1, len(selected_truck.route) - 1), 2))
             selected_truck.route[i:j] = reversed(selected_truck.route[i:j])
-            # Validate time windows after reordering
-            valid = True
-            current_time = 0
-            for k in range(len(selected_truck.route) - 1):
-                current_location = self.customers[selected_truck.route[k]]
-                next_customer = self.customers[selected_truck.route[k + 1]]
-                travel_time = calculate_distance(current_location, next_customer)
-                current_time = max(current_time + travel_time, next_customer.ready_time) + next_customer.service_time
-                if current_time > next_customer.due_date:
-                    valid = False
-                    break
-            if not valid:
-                return self.routes  # Return unmodified if invalid
 
         return new_routes
 
