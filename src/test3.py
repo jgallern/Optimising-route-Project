@@ -64,7 +64,7 @@ def calculate_distance(c1: Customer, c2: Customer):
 
 # Solution Class
 class VRPTWSolution:
-    def __init__(self, customers: list[Customer], truck_capacity: int, max_trucks: int, depot: int):
+    def __init__(self, customers: list[Customer], truck_capacity: int, max_trucks: int, depot: Customer):
         """
         Initialize a VRPTWSolution object with the given attributes for the VRPTW problem.
         :param customers: list[Customer] list of Customer objects
@@ -141,7 +141,7 @@ class VRPTWSolution:
 
 # Simulated Annealing
 class SimulatedAnnealing:
-    def __init__(self, initial_solution: VRPTWSolution, customers: list[Customer], depot: int, initial_temperature=1000, cooling_rate=0.995, min_temperature=1e-3):
+    def __init__(self, initial_solution: VRPTWSolution, customers: list[Customer], depot: Customer, initial_temperature=1000, cooling_rate=0.995, min_temperature=1e-3):
         """
         Initialize the Simulated Annealing algorithm with the given parameters.
         :param initial_solution: VRPTWSolution object representing the initial solution
@@ -199,12 +199,25 @@ def plot_routes(solution: VRPTWSolution, customers: list[Customer]):
     :return:
     """
     plt.figure(figsize=(10, 10))
-    for truck in solution.routes:
+
+    # Generate distinct colors for routes
+    colors = plt.cm.tab20(np.linspace(0, 1, len(solution.routes)))
+
+    for truck, color in zip(solution.routes, colors):
+        # Get coordinates for the route
         route_coords = [(customers[stop].x, customers[stop].y) for stop in truck.route]
         route_coords = np.array(route_coords)
-        plt.plot(route_coords[:, 0], route_coords[:, 1], marker='o', label=f"Truck {truck.id}")
-    plt.scatter([c.x for c in customers], [c.y for c in customers], c='red', zorder=5)
-    plt.text(customers[0].x, customers[0].y, "Depot", fontsize=12, color='blue')
+
+        # Plot the route with a unique color
+        plt.plot(route_coords[:, 0], route_coords[:, 1], marker='o', color=color, label=f"Truck {truck.id}")
+
+        # Plot the customers with the same color
+        for stop in truck.route[1:-1]:  # Exclude depot (start and end)
+            plt.scatter(customers[stop].x, customers[stop].y, color=color, zorder=5)
+
+    # Plot the depot in black
+    plt.scatter(customers[0].x, customers[0].y, color='black', zorder=10, label="Depot")
+
     plt.legend()
     plt.title("Optimized Truck Routes (Minimized Trucks)")
     plt.xlabel("X Coordinate")
@@ -242,8 +255,8 @@ def load_conditions(file_path: str):
 # Main Execution
 if __name__ == "__main__":
     projectRoot = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))  # Compatibility fix
-    customers = load_customers(os.path.join(projectRoot, "solomon_instances", "c102.txt"))  # Load customer data
-    conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", "c102.txt"))  # Load conditions data
+    customers = load_customers(os.path.join(projectRoot, "solomon_instances", "rc102.txt"))  # Load customer data
+    conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", "rc102.txt"))  # Load conditions data
     initial_solution = VRPTWSolution(customers, truck_capacity=conditions[1], max_trucks=conditions[0], depot=customers[0])  # Initialize solution
     sa = SimulatedAnnealing(initial_solution, customers, customers[0])  # Initialize Simulated Annealing
     best_solution = sa.optimize()  # Optimize solution
