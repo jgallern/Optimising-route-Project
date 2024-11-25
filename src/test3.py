@@ -107,7 +107,7 @@ class VRPTWSolution:
                 trucks.append(truck)
         return trucks
 
-    def calculate_cost(self, alpha=1000, beta=1):
+    def calculate_cost(self, alpha=1, beta=1000):
         """
         Calculate the cost of the solution using a linear combination of the number of trucks and total distance.
         This allows us to minimize the number of trucks used while minimizing the total distance traveled.
@@ -120,6 +120,13 @@ class VRPTWSolution:
         total_distance = sum(truck.calculate_route_distance(self.customers) for truck in self.routes)
         return alpha * num_trucks + beta * total_distance
 
+    def calculate_total_distance(self):
+        """
+        Calculate the total distance of the solution by summing the distance of each truck's route.
+        :return: int total distance of the solution
+        """
+        return sum(truck.calculate_route_distance(self.customers) for truck in self.routes)
+
     def neighbor_solution(self):
         """
         Generate a neighbor solution by attempting to merge two routes together
@@ -129,10 +136,9 @@ class VRPTWSolution:
         for i, truck in enumerate(self.routes):
             new_routes[i].route = truck.route[:]
 
-        # Attempt to merge two routes
         if len(new_routes) > 1:
             truck1, truck2 = random.sample(new_routes, 2)
-            if len(truck2.route) > 2:  # Truck 2 has customers to merge
+            if len(truck2.route) > 2:  # Truck 2 has customers to relocate
                 customer_to_move = random.choice(truck2.route[1:-1])  # Exclude depot
                 if truck1.remaining_capacity >= self.customers[customer_to_move].demand:
                     truck2.route.remove(customer_to_move)
@@ -140,11 +146,17 @@ class VRPTWSolution:
                     truck1.remaining_capacity -= self.customers[customer_to_move].demand
                     truck2.remaining_capacity += self.customers[customer_to_move].demand
 
+        # Add 2-Opt move for a single route
+        selected_truck = random.choice(new_routes)
+        if len(selected_truck.route) > 3:  # At least 3 points for 2-Opt
+            i, j = sorted(random.sample(range(1, len(selected_truck.route) - 1), 2))
+            selected_truck.route[i:j] = reversed(selected_truck.route[i:j])
+
         return new_routes
 
 # Simulated Annealing
 class SimulatedAnnealing:
-    def __init__(self, initial_solution: VRPTWSolution, customers: list[Customer], depot: Customer, initial_temperature=1000, cooling_rate=0.995, min_temperature=1e-3):
+    def __init__(self, initial_solution: VRPTWSolution, customers: list[Customer], depot: Customer, initial_temperature=1000, cooling_rate=0.995, min_temperature=1e-3, max_passes=10):
         """
         Initialize the Simulated Annealing algorithm with the given parameters.
         :param initial_solution: VRPTWSolution object representing the initial solution
@@ -161,6 +173,7 @@ class SimulatedAnnealing:
         self.temperature = initial_temperature
         self.cooling_rate = cooling_rate
         self.min_temperature = min_temperature
+        self.max_passes = max_passes
 
     def accept_probability(self, delta, temperature):
         """
@@ -178,23 +191,26 @@ class SimulatedAnnealing:
         Optimize the VRPTW problem using Simulated Annealing to minimize the number of trucks used and the total distance traveled.
         :return: VRPTWSolution object representing the best solution found
         """
-        while self.temperature > self.min_temperature:
-            new_routes = self.current_solution.neighbor_solution()
-            new_solution = VRPTWSolution(self.customers, self.current_solution.truck_capacity, self.current_solution.max_trucks, self.depot)
-            new_solution.routes = new_routes
-            current_cost = self.current_solution.calculate_cost()
-            new_cost = new_solution.calculate_cost()
+        for pass_num in range(self.max_passes):
+            print(f"Pass {pass_num + 1}/{self.max_passes}")
+            self.temperature = 1000  # Reset the temperature for each pass
+            while self.temperature > self.min_temperature:
+                new_routes = self.current_solution.neighbor_solution()
+                new_solution = VRPTWSolution(self.customers, self.current_solution.truck_capacity, self.current_solution.max_trucks, self.depot)
+                new_solution.routes = new_routes
+                current_cost = self.current_solution.calculate_cost()
+                new_cost = new_solution.calculate_cost()
 
-            if self.accept_probability(new_cost - current_cost, self.temperature) > random.random():
-                self.current_solution = new_solution
-                if new_cost < self.best_solution.calculate_cost():
-                    self.best_solution = new_solution
+                if self.accept_probability(new_cost - current_cost, self.temperature) > random.random():
+                    self.current_solution = new_solution
+                    if new_cost < self.best_solution.calculate_cost():
+                        self.best_solution = new_solution
 
-            self.temperature *= self.cooling_rate
+                self.temperature *= self.cooling_rate
         return self.best_solution
 
 # Visualization
-def plot_routes(solution: VRPTWSolution, customers: list[Customer]):
+def plot_routes(solution: VRPTWSolution, customers: list[Customer], filename: str, initial_cost: float, optimized_cost: float, maxpasses: int):
     """
     Plot the optimized truck routes on a 2D graph with the customers and depot locations shown.
     :param solution: VRPTWSolution object representing the optimized solution
@@ -226,8 +242,12 @@ def plot_routes(solution: VRPTWSolution, customers: list[Customer]):
     ab = AnnotationBbox(imagebox, (customers[0].x, customers[0].y), frameon=False)
     plt.gca().add_artist(ab)
 
+    # Add the initial cost, the optimized cost and the total number of passes to the plot as text below the graph & legend
+    plt.text(0.5, -0.1, f"Initial Cost: {initial_cost:.2f}\nOptimized Cost ({maxpasses} passes): {optimized_cost:.2f} ", horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes)
+
+    # Add legend and labels
     plt.legend()
-    plt.title("Optimized Truck Routes (Minimized Trucks)")
+    plt.title(f"Optimized Truck Routes for {filename.strip('.txt')}")
     plt.xlabel("X Coordinate")
     plt.ylabel("Y Coordinate")
     plt.grid()
@@ -262,9 +282,12 @@ def load_conditions(file_path: str):
 
 # Main Execution
 if __name__ == "__main__":
-    customers = load_customers(os.path.join(projectRoot, "solomon_instances", "rc102.txt"))  # Load customer data
-    conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", "rc102.txt"))  # Load conditions data
+    filename = "r202.txt"
+    maxpasses = 5
+
+    customers = load_customers(os.path.join(projectRoot, "solomon_instances", filename))  # Load customer data
+    conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", filename))  # Load conditions data
     initial_solution = VRPTWSolution(customers, truck_capacity=conditions[1], max_trucks=conditions[0], depot=customers[0])  # Initialize solution
-    sa = SimulatedAnnealing(initial_solution, customers, customers[0])  # Initialize Simulated Annealing
+    sa = SimulatedAnnealing(initial_solution, customers, customers[0], max_passes=maxpasses)  # Initialize Simulated Annealing
     best_solution = sa.optimize()  # Optimize solution
-    plot_routes(best_solution, customers)  # Plot optimized routes
+    plot_routes(best_solution, customers, filename, initial_solution.calculate_total_distance(), best_solution.calculate_total_distance(), maxpasses)  # Plot optimized routes
