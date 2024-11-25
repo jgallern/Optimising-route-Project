@@ -30,38 +30,6 @@ class Customer:
         self.due_date = due_date
         self.service_time = service_time
 
-
-def validate_time_window(self, customers: list[Customer]):
-    """
-    Validate the time window constraints for the truck's route.
-    :param customers: List of Customer objects.
-    :return: True if the route is valid, otherwise False.
-    """
-    current_time = 0
-    for i in range(len(self.route) - 1):
-        from_customer = customers[self.route[i]]
-        to_customer = customers[self.route[i + 1]]
-
-        # Travel time
-        travel_time = calculate_distance(from_customer, to_customer)
-        arrival_time = current_time + travel_time
-
-        # Check time window constraint
-        if arrival_time < to_customer.ready_time:
-            # Truck arrives early, wait until ready_time
-            current_time = to_customer.ready_time
-        elif arrival_time > to_customer.due_date:
-            # Time window violated
-            return False
-        else:
-            # Valid arrival time
-            current_time = arrival_time
-
-        # Add service time
-        current_time += to_customer.service_time
-
-    return True
-
 # Truck class
 class Truck:
     def __init__(self, id: int, capacity: int, start_location: int):
@@ -88,6 +56,32 @@ class Truck:
         for i in range(len(self.route) - 1):
             distance += calculate_distance(customers[self.route[i]], customers[self.route[i + 1]])
         return distance
+
+    def can_visit(self, customer: Customer, current_location: Customer):
+        """
+        Check if the truck can visit the customer within time and capacity constraints.
+        :param customer: The customer to visit next.
+        :param current_location: The current location of the truck.
+        :return: True if visit is feasible, otherwise False.
+        """
+        travel_time = calculate_distance(current_location, customer)
+        arrival_time = self.current_time + travel_time
+        if arrival_time > customer.due_date:
+            return False  # Cannot arrive after due date
+        return self.remaining_capacity >= customer.demand
+
+    def visit(self, customer: Customer, current_location: Customer):
+        """
+        Update the truck's state after visiting a customer.
+        :param customer: The customer being visited.
+        :param current_location: The truck's current location.
+        """
+        travel_time = calculate_distance(current_location, customer)
+        arrival_time = self.current_time + travel_time
+        # Wait if arriving early
+        self.current_time = max(arrival_time, customer.ready_time) + customer.service_time
+        self.remaining_capacity -= customer.demand
+        self.total_distance += travel_time
 
 
 @lru_cache(maxsize=None)
@@ -117,32 +111,30 @@ class VRPTWSolution:
         self.routes = self.generate_initial_solution()
 
     def generate_initial_solution(self):
-        """
-        Generate an initial solution for the VRPTW problem using a greedy heuristic
-        :return: list of Truck objects
-        """
         unvisited = set(self.customers[1:])
         trucks = []
         for truck_id in range(self.max_trucks):
             truck = Truck(truck_id, self.truck_capacity, self.depot.id)
             while unvisited:
                 nearest_customer, nearest_distance = None, float('inf')
+                current_location = self.customers[truck.route[-1]]
                 for customer in unvisited:
-                    distance = calculate_distance(self.customers[truck.route[-1]], customer)
-                    if truck.remaining_capacity >= customer.demand and distance < nearest_distance:
-                        nearest_customer, nearest_distance = customer, distance
+                    if truck.can_visit(customer, current_location):
+                        distance = calculate_distance(current_location, customer)
+                        if distance < nearest_distance:
+                            nearest_customer, nearest_distance = customer, distance
                 if nearest_customer:
+                    truck.visit(nearest_customer, current_location)
                     truck.route.append(nearest_customer.id)
-                    truck.remaining_capacity -= nearest_customer.demand
                     unvisited.remove(nearest_customer)
                 else:
                     break
-            if len(truck.route) > 1:  # Only add if used
+            if len(truck.route) > 1:
                 truck.route.append(self.depot.id)
                 trucks.append(truck)
         return trucks
 
-    def calculate_cost(self, alpha=1, beta=1000):
+    def calculate_cost(self, alpha=1000, beta=1):
         """
         Calculate the cost of the solution using a linear combination of the number of trucks and total distance.
         This allows us to minimize the number of trucks used while minimizing the total distance traveled.
@@ -163,41 +155,29 @@ class VRPTWSolution:
         return sum(truck.calculate_route_distance(self.customers) for truck in self.routes)
 
     def neighbor_solution(self):
-        """
-        Generate a neighbor solution by attempting to merge two routes together or applying a 2-Opt move to improve a route.
-        Ensures truck capacity constraints are respected.
-        :return: list[Truck] list of Truck objects
-        """
-        # Copy current routes for modification
         new_routes = [Truck(t.id, t.capacity, t.route[0]) for t in self.routes]
         for i, truck in enumerate(self.routes):
             new_routes[i].route = truck.route[:]
-            new_routes[i].remaining_capacity = truck.remaining_capacity  # Maintain capacity info
+            new_routes[i].remaining_capacity = truck.remaining_capacity
 
-        # Attempt to relocate a customer from one truck to another
-        if len(new_routes) > 1:
-            truck1, truck2 = random.sample(new_routes, 2)
-            if len(truck2.route) > 2:  # Truck 2 has customers to relocate
-                customer_to_move = random.choice(truck2.route[1:-1])  # Exclude depot
-                customer_demand = self.customers[customer_to_move].demand
-                if truck1.remaining_capacity >= customer_demand:
-                    # Perform relocation
-                    truck2.route.remove(customer_to_move)
-                    truck2.remaining_capacity += customer_demand
-                    truck1.route.insert(-1, customer_to_move)  # Before returning to depot
-                    truck1.remaining_capacity -= customer_demand
-
-        # Apply a 2-Opt move to a single route
+        # Modify the route and validate time windows
         selected_truck = random.choice(new_routes)
-        if len(selected_truck.route) > 3:  # At least 3 points for 2-Opt
+        if len(selected_truck.route) > 3:
             i, j = sorted(random.sample(range(1, len(selected_truck.route) - 1), 2))
             selected_truck.route[i:j] = reversed(selected_truck.route[i:j])
-
-        # Validate all routes for capacity compliance
-        for truck in new_routes:
-            used_capacity = sum(self.customers[stop].demand for stop in truck.route[1:-1])  # Exclude depot
-            if used_capacity > truck.capacity:
-                raise ValueError(f"Truck {truck.id} exceeds capacity after neighbor operation.")
+            # Validate time windows after reordering
+            valid = True
+            current_time = 0
+            for k in range(len(selected_truck.route) - 1):
+                current_location = self.customers[selected_truck.route[k]]
+                next_customer = self.customers[selected_truck.route[k + 1]]
+                travel_time = calculate_distance(current_location, next_customer)
+                current_time = max(current_time + travel_time, next_customer.ready_time) + next_customer.service_time
+                if current_time > next_customer.due_date:
+                    valid = False
+                    break
+            if not valid:
+                return self.routes  # Return unmodified if invalid
 
         return new_routes
 
@@ -352,7 +332,7 @@ def load_conditions(file_path: str):
 # Main Execution
 if __name__ == "__main__":
     filename = "rc201.txt"
-    maxpasses = 1
+    maxpasses = 10
 
     customers = load_customers(os.path.join(projectRoot, "solomon_instances", filename))  # Load customer data
     conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", filename))  # Load conditions data
