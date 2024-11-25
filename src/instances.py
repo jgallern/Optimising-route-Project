@@ -1,4 +1,4 @@
-import pandas as pd     
+import pandas as pd
 import matplotlib.pyplot as plt
 import os
 
@@ -25,23 +25,22 @@ class instances:
             elif current_section is not None and line:
                 current_section.append(line)
 
-
         # Parse vehicle data
         vehicle_headers = vehicle_section[0].split()  # Extraction des colonnes
         vehicle_data = [list(map(int, line.split())) for line in vehicle_section[1:]]
         self.vehicle_df = pd.DataFrame(vehicle_data, columns=vehicle_headers)
 
         ## Parse customer data
-        customer_headers = ['CUST NO.', 'XCOORD.', 'YCOORD.', 'DEMAND', 'READY TIME', 'DUE DATE', 'SERVICE TIME'] 
+        customer_headers = ['CUST NO.', 'XCOORD.', 'YCOORD.', 'DEMAND', 'READY TIME', 'DUE DATE', 'SERVICE TIME']
         Deposit = customer_section[1]
         customer_data = [list(map(float, line.split())) for line in customer_section[1:]]
         self.customer_df = pd.DataFrame(customer_data, columns=customer_headers)
-    
+
     def plot(self):
         plt.figure()
         plt.scatter(self.customer_df['XCOORD.'], self.customer_df['YCOORD.'])
         plt.xlabel('X-coordinate')
         plt.ylabel('Y-coordinate')
-        plt.scatter(self.customer_df['XCOORD.'].iloc[0], self.customer_df['YCOORD.'].iloc[0], color='red')  
+        plt.scatter(self.customer_df['XCOORD.'].iloc[0], self.customer_df['YCOORD.'].iloc[0], color='red')
         plt.title("map of " + self.name)
 
