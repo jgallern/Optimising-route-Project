@@ -44,3 +44,5 @@ class instances:
         plt.scatter(self.customer_df['XCOORD.'].iloc[0], self.customer_df['YCOORD.'].iloc[0], color='red')
         plt.title("map of " + self.name)
 
+    def total_demand(self):
+        return self.customer_df['DEMAND'].sum()

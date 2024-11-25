@@ -138,7 +138,7 @@ class VRPTWSolution:
                     break  # Stop if all customers are visited
         return trucks
 
-    def calculate_cost(self, alpha=10000, beta=1):
+    def calculate_cost(self, alpha=1000, beta=1):
         """
         Calculate the cost of the solution with high emphasis on minimizing the number of trucks.
         :param alpha: INT weight for the number of trucks
@@ -158,15 +158,15 @@ class VRPTWSolution:
 
     def neighbor_solution(self):
         """
-        Generate a neighbor solution with an emphasis on merging routes.
+        Generate a neighbor solution by modifying routes and ensuring time window constraints are respected.
         """
         new_routes = [Truck(t.id, t.capacity, t.route[0]) for t in self.routes]
         for i, truck in enumerate(self.routes):
             new_routes[i].route = truck.route[:]
             new_routes[i].remaining_capacity = truck.remaining_capacity
 
-        # Attempt to merge two routes
-        if len(new_routes) > 1:
+        # Attempt to merge or modify routes
+        if len(new_routes) > 1 and random.random() < 0.5:  # 50% chance to merge routes
             truck1, truck2 = random.sample(new_routes, 2)
             if len(truck2.route) > 2:  # Ensure truck2 has customers to move
                 for customer_id in truck2.route[1:-1]:  # Exclude depot
@@ -174,19 +174,45 @@ class VRPTWSolution:
                     if truck1.remaining_capacity >= customer.demand:
                         current_location = self.customers[truck1.route[-1]]
                         if truck1.can_visit(customer, current_location):
-                            # Move customer to truck1
                             truck2.route.remove(customer_id)
-                            truck1.route.insert(-1, customer_id)  # Add before depot
+                            truck1.route.insert(-1, customer_id)
                             truck1.remaining_capacity -= customer.demand
                             truck2.remaining_capacity += customer.demand
 
-        # Apply small local change (2-Opt) to improve routes
-        selected_truck = random.choice(new_routes)
-        if len(selected_truck.route) > 3:
-            i, j = sorted(random.sample(range(1, len(selected_truck.route) - 1), 2))
-            selected_truck.route[i:j] = reversed(selected_truck.route[i:j])
+        else:  # Apply a 2-Opt move within a single route
+            selected_truck = random.choice(new_routes)
+            if len(selected_truck.route) > 3:
+                i, j = sorted(random.sample(range(1, len(selected_truck.route) - 1), 2))
+                selected_truck.route[i:j] = reversed(selected_truck.route[i:j])
+
+        # Validate all routes for time window constraints
+        for truck in new_routes:
+            if not self.validate_time_windows(truck):
+                return self.routes  # Revert to the previous solution if invalid
 
         return new_routes
+
+    def validate_time_windows(self, truck):
+        """
+        Validate the time windows for a single truck's route.
+        :param truck: Truck object whose route needs to be validated.
+        :return: True if all time windows are respected, False otherwise.
+        """
+        current_time = 0
+        for i in range(len(truck.route) - 1):
+            current_location = self.customers[truck.route[i]]
+            next_customer = self.customers[truck.route[i + 1]]
+
+            travel_time = calculate_distance(current_location, next_customer)
+            arrival_time = current_time + travel_time
+
+            # Check if arrival time respects the time window
+            if arrival_time > next_customer.due_date:
+                return False  # Cannot arrive after due date
+            current_time = max(arrival_time, next_customer.ready_time) + next_customer.service_time
+
+        return True
+
 
 # Simulated Annealing
 class SimulatedAnnealing:
@@ -347,5 +373,7 @@ if __name__ == "__main__":
     sa = SimulatedAnnealing(initial_solution, customers, customers[0], max_passes=maxpasses)  # Initialize Simulated Annealing
     start_time = time.time()
     best_solution = sa.optimize()  # Optimize solution
+    for i in range(len(best_solution.routes)):
+        print(f"Truck {i}: {best_solution.routes[i].route}")
     end_time = time.time()
     plot_routes(best_solution, customers, filename, initial_solution.calculate_total_distance(), best_solution.calculate_total_distance(), maxpasses, (end_time-start_time))  # Plot optimized routes
