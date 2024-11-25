@@ -4,6 +4,9 @@ import random
 from math import sqrt, exp
 import os
 
+projectRoot = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))  # Compatibility fix
+
+
 # Customer class
 class Customer:
     def __init__(self, id: int, x: int, y: int, demand: int, ready_time: int, due_date: int, service_time: int):
@@ -198,6 +201,7 @@ def plot_routes(solution: VRPTWSolution, customers: list[Customer]):
     :param customers: list of Customer objects representing the customers
     :return:
     """
+    from matplotlib.offsetbox import OffsetImage, AnnotationBbox
     plt.figure(figsize=(10, 10))
 
     # Generate distinct colors for routes
@@ -215,8 +219,12 @@ def plot_routes(solution: VRPTWSolution, customers: list[Customer]):
         for stop in truck.route[1:-1]:  # Exclude depot (start and end)
             plt.scatter(customers[stop].x, customers[stop].y, color=color, zorder=5)
 
-    # Plot the depot in black
-    plt.scatter(customers[0].x, customers[0].y, color='black', zorder=10, label="Depot")
+
+    # Overlay an SVG for the depot
+    depot_image = plt.imread(os.path.join(projectRoot, "src", "warehouse-10-512.png"))
+    imagebox = OffsetImage(depot_image, zoom=0.04)  # Adjust zoom for size
+    ab = AnnotationBbox(imagebox, (customers[0].x, customers[0].y), frameon=False)
+    plt.gca().add_artist(ab)
 
     plt.legend()
     plt.title("Optimized Truck Routes (Minimized Trucks)")
@@ -254,7 +262,6 @@ def load_conditions(file_path: str):
 
 # Main Execution
 if __name__ == "__main__":
-    projectRoot = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))  # Compatibility fix
     customers = load_customers(os.path.join(projectRoot, "solomon_instances", "rc102.txt"))  # Load customer data
     conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", "rc102.txt"))  # Load conditions data
     initial_solution = VRPTWSolution(customers, truck_capacity=conditions[1], max_trucks=conditions[0], depot=customers[0])  # Initialize solution
