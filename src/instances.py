@@ -6,7 +6,7 @@ import os
 class instances:
     def __init__(self, file):
         self.file = file
-        self.name = é
+        self.name = os.path.basename(file).strip(".txt")
         # opening the salomon instances txt file
         with open(self.file, "r") as file:
             lines = file.readlines()
