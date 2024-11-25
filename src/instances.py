@@ -1,11 +1,12 @@
 import pandas as pd     
 import matplotlib.pyplot as plt
+import os
 
 
 class instances:
     def __init__(self, file):
         self.file = file
-        self.name = file.split('/')[-1].split('.')[0]
+        self.name = é
         # opening the salomon instances txt file
         with open(self.file, "r") as file:
             lines = file.readlines()
