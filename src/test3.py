@@ -333,6 +333,7 @@ class SimulatedAnnealing:
         self.temperature = initial_temperature
         self.cooling_rate = cooling_rate
         self.min_temperature = min_temperature
+        self.plot_data = None
 
     def accept_probability(self, delta, temperature):
         """
@@ -366,6 +367,12 @@ class SimulatedAnnealing:
         :param num_workers: INT Number of parallel workers.
         """
         iteration = 0
+
+        # Data for plotting
+        temperatures = []
+        best_costs = []
+        active_trucks_counts = []
+
         while self.temperature > self.min_temperature:
             neighbors = []
             costs = []
@@ -390,18 +397,29 @@ class SimulatedAnnealing:
                 self.current_solution = best_neighbor
                 if best_cost < self.best_solution.calculate_cost(alpha, beta, gamma):
                     self.best_solution = best_neighbor
+                    print(f"Iteration {iteration}: Temperature {self.temperature:.4f}, Best Cost {self.best_solution.calculate_cost(alpha, beta, gamma)}, Active Trucks: {len([truck for truck in self.best_solution.routes if len(truck.route) > 2])}")
+
+            # Store data for plotting
+            temperatures.append(self.temperature)
+            best_costs.append(self.best_solution.calculate_cost(alpha, beta, gamma))
+            active_trucks_counts.append(len([truck for truck in self.best_solution.routes if len(truck.route) > 2]))
+
             # Cool down
             self.temperature *= self.cooling_rate
             iteration += 1
-            active_trucks = len([truck for truck in self.best_solution.routes if len(truck.route) > 2])
-            print(
-                f"Iteration {iteration}: Temperature {self.temperature:.4f}, Best Cost {self.best_solution.calculate_cost(alpha, beta, gamma)}, Active Trucks: {active_trucks}")
+
+        # Store the data for later plotting
+        self.plot_data = {
+            "temperatures": temperatures,
+            "best_costs": best_costs,
+            "active_trucks_counts": active_trucks_counts,
+        }
 
         return self.best_solution
 
 
 # Visualization
-def plot_routes(solution: VRPTWSolution, customers: list[Customer], filename: str, inicost: float, optcost: float, opttime: float):
+def plot_routes(solution: VRPTWSolution, customers: list[Customer], parameters: dict, inicost: float, optcost: float, opttime: float):
     """
     Plot the optimized truck routes on a 2D graph with the customers and depot locations shown.
     :param solution: VRPTWSolution object representing the optimized solution
@@ -436,16 +454,70 @@ def plot_routes(solution: VRPTWSolution, customers: list[Customer], filename: st
 
     # Add the initial cost, the optimized cost and the total number of passes to the plot as text below the graph & legend
     plt.text(0.5, -0.1,
-             f"Initial Cost: {inicost:.2f}\nOptimized Cost [{opttime:.2f}s]: {optcost:.2f} ",
+             f"Initial distance: {inicost:.2f}\nOptimized distance [{opttime:.2f}s]: {optcost:.2f} ",
              horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes)
+
+    # Add a text over the title for the parameters used
+    plt.text(0.5, 1.05,
+             f"Initial Temp: {parameters['initial_temperature']}, Cooling Rate: {parameters['cooling_rate']}, Min Temp: {parameters['min_temperature']}, Max Iterations: {parameters['max_iterations']}, Alpha: {parameters['alpha']}, Beta: {parameters['beta']}, Gamma: {parameters['gamma']}",
+             horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes)
+
 
     # Add legend and labels
     plt.legend()
-    plt.title(f"Optimized Truck Routes for {filename.strip('.txt')}")
+    plt.title(f"Optimized Truck Routes for {parameters["filename"].strip('.txt')}")
     plt.xlabel("X Coordinate")
     plt.ylabel("Y Coordinate")
     plt.grid()
     plt.show()
+
+
+# Plot Optimization Progress
+def plot_optimization_progress(plot_data, filename):
+    """
+    Plot the evolution of temperature, best cost, and active trucks over the course of optimization.
+    :param plot_data: dict containing 'temperatures', 'best_costs', and 'active_trucks_counts' lists.
+    :param filename: str filename for title/labeling.
+    """
+    temperatures = plot_data["temperatures"]
+    best_costs = plot_data["best_costs"]
+    active_trucks_counts = plot_data["active_trucks_counts"]
+
+    iterations = list(range(1, len(temperatures) + 1))
+
+    plt.figure(figsize=(12, 8))
+
+    # Plot Best Cost
+    plt.subplot(3, 1, 1)
+    plt.plot(iterations, best_costs, label="Best Cost", color="blue")
+    plt.xlabel("Iteration")
+    plt.ylabel("Best Cost")
+    plt.title(f"Best Cost Evolution for {filename}")
+    plt.grid(True)
+    plt.legend()
+
+    # Plot Temperature
+    plt.subplot(3, 1, 2)
+    plt.plot(iterations, temperatures, label="Temperature", color="red")
+    plt.xlabel("Iteration")
+    plt.ylabel("Temperature")
+    plt.title("Temperature Evolution")
+    plt.grid(True)
+    plt.legend()
+
+    # Plot Active Trucks
+    plt.subplot(3, 1, 3)
+    plt.plot(iterations, active_trucks_counts, label="Active Trucks", color="green")
+    plt.xlabel("Iteration")
+    plt.ylabel("Active Trucks")
+    plt.title("Active Trucks Count Evolution")
+    plt.grid(True)
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+
 
 # Load data
 def load_customers(file_path: str):
@@ -474,41 +546,42 @@ def load_conditions(file_path: str):
 
     return list(map(int, lines[4].split()))
 
-def isBestSolutionValid(best_solution: VRPTWSolution):
-    """
-    Check if the best solution is valid by ensuring all routes are feasible.
-    :param best_solution: VRPTWSolution object representing the best solution
-    :return: bool True if the solution is valid, otherwise False
-    """
-    for truck in best_solution.routes:
-        if not best_solution.is_feasible_route(truck.route):
-            return False
-    return True
 
 # Main Execution
 if __name__ == "__main__":
-    filename = ("r101.txt")
 
-    customers = load_customers(os.path.join(projectRoot, "solomon_instances", filename))  # Load customer data
-    conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", filename))  # Load conditions data
+    parameters = {
+        "filename": "r101.txt",
+        "initial_temperature": 1000.0,  # Higher -> More exploration, but risk of accepting worse solutions
+        "cooling_rate": 0.99,           # Higher -> Faster convergence, but risk of local minima
+        "min_temperature": 0.001,       # Lower -> More iterations, but better results
+        "max_iterations": 50,           # Higher -> More exploration, but longer runtime
+        "alpha": 100,                   # Higher -> More penalty for more trucks
+        "beta": 1000,                   # Higher -> More penalty for longer routes
+        "gamma": 100,                   # Higher -> More penalty for underutilized trucks
+        "num_workers": 16               # Higher -> Faster evaluation (set it to your computer's threads count)
+    }
+
+    customers = load_customers(os.path.join(projectRoot, "solomon_instances", parameters["filename"]))  # Load customer data
+    conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", parameters["filename"]))  # Load conditions data
 
     initial_solution = VRPTWSolution(customers, truck_capacity=conditions[1], max_trucks=conditions[0], depot=customers[0])  # Initialize solution
 
     sa = SimulatedAnnealing(
         initial_solution=initial_solution,
-        initial_temperature=1000.0,  # Higher -> More exploration, but risk of accepting worse solutions
-        cooling_rate=0.99,  # Higher -> Faster convergence, but risk of local minima
-        min_temperature=0.001  # Lower -> More iterations, but better results
+        initial_temperature=parameters["initial_temperature"],
+        cooling_rate=parameters["cooling_rate"],
+        min_temperature=parameters["min_temperature"]
     )
 
     start_time = time.time()  # Timer start
 
     best_solution = sa.optimize(
-        num_workers=16,  # Higher -> Faster evaluation, but more memory (set it to your computer's threads count)
-        max_iterations=50,  # Higher -> More exploration, but longer
-        alpha=100,  # Truck weight for cost calculation
-        beta=1000,  # Distance weight for cost calculation
-        gamma=100  # Underutilized truck weight for cost calculation
+        num_workers=parameters["num_workers"],
+        max_iterations=parameters["max_iterations"],  # Higher -> More exploration, but longer
+        alpha=parameters["alpha"],  # Truck weight for cost calculation
+        beta=parameters["beta"],  # Distance weight for cost calculation
+        gamma=parameters["gamma"]
     )
 
     end_time = time.time()  # Timer end
@@ -517,5 +590,8 @@ if __name__ == "__main__":
     for i in range(len(best_solution.routes)):
         print(f"Truck {i}: {best_solution.routes[i].route}")
 
+    # Plot the optimization progress
+    plot_optimization_progress(sa.plot_data, parameters["filename"])  # Plot optimization progress
+
     # Plot the optimized routes
-    plot_routes(best_solution, customers, filename, initial_solution.calculate_distance(), best_solution.calculate_distance(), (end_time-start_time))  # Plot optimized routes
+    plot_routes(best_solution, customers, parameters, initial_solution.calculate_distance(), best_solution.calculate_distance(), (end_time-start_time))  # Plot optimized routes
