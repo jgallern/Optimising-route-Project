@@ -5,6 +5,7 @@ from math import sqrt, exp
 import os
 from functools import lru_cache
 import time
+import concurrent.futures
 
 projectRoot = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))  # Compatibility fix
 
@@ -284,7 +285,7 @@ class VRPTWSolution:
 
         return True
 
-    def calculate_cost(self, alpha=500, beta=1000, gamma=500):  # Factors might need a little fine tuning
+    def calculate_cost(self, alpha=100, beta=1000, gamma=100):  # Factors might need a little fine tuning
         """
         Calculate the cost of the solution with weights on minimizing trucks, distance, and underutilized trucks.
         :param alpha: INT weight for the number of trucks.
@@ -324,30 +325,54 @@ class SimulatedAnnealing:
             return 1
         return exp(-delta / temperature)
 
-    def optimize(self, max_iterations=1000):
+    def generate_and_evaluate_neighbor(self, current_cost):
         """
-        Optimize the VRPTW problem using Simulated Annealing.
+        Generate a neighbor solution and evaluate its cost.
+        :param current_cost: INT Current solution cost.
+        :return: (VRPTWSolution, cost)
+        """
+        neighbor_routes = self.current_solution.neighbor_solution()
+        new_solution = VRPTWSolution(
+            self.current_solution.customers,
+            self.current_solution.truck_capacity,
+            self.current_solution.max_trucks,
+            self.current_solution.depot,
+        )
+        new_solution.routes = neighbor_routes
+        new_cost = new_solution.calculate_cost()
+        return new_solution, new_cost
+
+    def optimize(self, max_iterations=1000, num_workers=16):
+        """
+        Optimize the VRPTW problem using Simulated Annealing with parallel neighbor evaluation.
+        :param max_iterations: INT Maximum iterations per temperature level.
+        :param num_workers: INT Number of parallel workers.
         """
         iteration = 0
         while self.temperature > self.min_temperature:
-            for _ in range(max_iterations):
-                # Generate a neighbor solution
-                neighbor_routes = self.current_solution.neighbor_solution()
-                new_solution = VRPTWSolution(self.current_solution.customers,
-                                             self.current_solution.truck_capacity,
-                                             self.current_solution.max_trucks,
-                                             self.current_solution.depot)
-                new_solution.routes = neighbor_routes
+            neighbors = []
+            costs = []
+            current_cost = self.current_solution.calculate_cost()
 
-                # Calculate costs
-                current_cost = self.current_solution.calculate_cost()
-                new_cost = new_solution.calculate_cost()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+                # Generate neighbors in parallel
+                futures = [executor.submit(self.generate_and_evaluate_neighbor, current_cost) for _ in
+                           range(max_iterations)]
+                for future in concurrent.futures.as_completed(futures):
+                    neighbor, cost = future.result()
+                    neighbors.append(neighbor)
+                    costs.append(cost)
 
-                # Accept or reject the neighbor
-                if self.accept_probability(new_cost - current_cost, self.temperature) > random.random():
-                    self.current_solution = new_solution
-                    if new_cost < self.best_solution.calculate_cost():
-                        self.best_solution = new_solution
+            # Select the best neighbor
+            best_idx = costs.index(min(costs))
+            best_neighbor = neighbors[best_idx]
+            best_cost = costs[best_idx]
+
+            # Accept or reject the best neighbor
+            if self.accept_probability(best_cost - current_cost, self.temperature) > random.random():
+                self.current_solution = best_neighbor
+                if best_cost < self.best_solution.calculate_cost():
+                    self.best_solution = best_neighbor
 
             # Cool down
             self.temperature *= self.cooling_rate
@@ -446,7 +471,7 @@ def isBestSolutionValid(best_solution: VRPTWSolution):
 
 # Main Execution
 if __name__ == "__main__":
-    filename = ("rc201.txt")
+    filename = ("c109.txt")
 
     customers = load_customers(os.path.join(projectRoot, "solomon_instances", filename))  # Load customer data
     conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", filename))  # Load conditions data
