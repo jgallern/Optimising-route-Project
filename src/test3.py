@@ -161,8 +161,8 @@ class VRPTWSolution:
 
     def neighbor_solution(self):
         """
-        Generates a neighbor solution with multiple strategies for exploration.
-        Ensures that all generated routes are feasible with respect to capacity and time windows.
+        Generates a neighbor solution with strategies for adding/removing trucks and balancing routes.
+        Ensures all generated routes are feasible.
         """
         new_routes = [Truck(t.id, t.capacity, t.route[0]) for t in self.routes]
         for i, truck in enumerate(self.routes):
@@ -170,8 +170,11 @@ class VRPTWSolution:
             new_routes[i].remaining_capacity = truck.remaining_capacity
 
         # Choose a strategy for neighbor generation
-        strategy = random.choice(["merge_routes", "swap_between_routes", "reorder_within_route", "move_customer"])
-        depot_id = self.depot.id  # To simplify adding/removing depots
+        strategy = random.choice([
+            "merge_routes", "move_customer", "swap_between_routes",
+            "reorder_within_route", "add_truck", "remove_empty_trucks"
+        ])
+        depot_id = self.depot.id
 
         if strategy == "merge_routes" and len(new_routes) > 1:
             # Merge two routes
@@ -183,6 +186,20 @@ class VRPTWSolution:
                 truck1.route = combined_route + [depot_id]
                 truck2.route = [depot_id]  # Empty truck2
                 truck2.remaining_capacity = truck2.capacity
+
+        elif strategy == "move_customer" and len(new_routes) > 1:
+            # Move a customer from one route to another
+            truck1, truck2 = random.sample(new_routes, 2)
+            if len(truck1.route) > 2:  # Ensure truck1 has customers to move
+                customer = random.choice(truck1.route[1:-1])  # Exclude depot
+                truck1.route.remove(customer)
+                truck2.route.insert(-1, customer)  # Add to truck2
+
+                # Validate both routes
+                if not (self.is_feasible_route(truck1.route) and self.is_feasible_route(truck2.route)):
+                    # Revert changes if invalid
+                    truck2.route.remove(customer)
+                    truck1.route.insert(-1, customer)
 
         elif strategy == "swap_between_routes" and len(new_routes) > 1:
             # Swap customers between routes
@@ -216,19 +233,27 @@ class VRPTWSolution:
                 if self.is_feasible_route(new_route):
                     truck.route = new_route
 
-        elif strategy == "move_customer" and len(new_routes) > 1:
-            # Move a customer from one route to another
-            truck1, truck2 = random.sample(new_routes, 2)
-            if len(truck1.route) > 2:  # Ensure truck1 has customers to move
-                customer = random.choice(truck1.route[1:-1])  # Exclude depot
-                truck1.route.remove(customer)
-                truck2.route.insert(-1, customer)  # Add to truck2
+        elif strategy == "add_truck" and len(new_routes) < self.max_trucks:
+            # Add a new truck if needed
+            new_truck = Truck(len(new_routes), self.truck_capacity, depot_id)
+            # Attempt to split the longest route
+            longest_route = max(new_routes, key=lambda t: t.calculate_route_distance(self.customers))
+            if len(longest_route.route) > 3:  # At least 2 deliveries to split
+                split_point = len(longest_route.route) // 2
+                new_truck.route = longest_route.route[split_point:]
+                longest_route.route = longest_route.route[:split_point] + [depot_id]
 
-                # Validate both routes
-                if not (self.is_feasible_route(truck1.route) and self.is_feasible_route(truck2.route)):
-                    # Revert changes if invalid
-                    truck2.route.remove(customer)
-                    truck1.route.insert(-1, customer)
+                # Validate routes after split
+                if self.is_feasible_route(new_truck.route) and self.is_feasible_route(longest_route.route):
+                    new_routes.append(new_truck)
+                else:
+                    # Revert split if invalid
+                    longest_route.route += new_truck.route[1:]
+                    new_truck.route = [depot_id]
+
+        elif strategy == "remove_empty_trucks":
+            # Remove empty trucks
+            new_routes = [truck for truck in new_routes if len(truck.route) > 2]
 
         # Ensure all routes are feasible before returning
         for truck in new_routes:
@@ -259,13 +284,22 @@ class VRPTWSolution:
 
         return True
 
-    def calculate_cost(self, alpha=10, beta=100):
+    def calculate_cost(self, alpha=500, beta=1000, gamma=500):  # Factors might need a little fine tuning
         """
-        Calculate the cost of the solution with weights on minimizing trucks and distance.
+        Calculate the cost of the solution with weights on minimizing trucks, distance, and underutilized trucks.
+        :param alpha: INT weight for the number of trucks.
+        :param beta: INT weight for the total distance.
+        :param gamma: INT weight for underutilized trucks.
+        :return: INT cost of the solution.
         """
         num_trucks = len([truck for truck in self.routes if len(truck.route) > 2])  # Exclude empty trucks
         total_distance = sum(truck.calculate_route_distance(self.customers) for truck in self.routes)
-        return alpha * num_trucks + beta * total_distance
+
+        # Penalize underutilized trucks
+        underutilized_trucks = sum(1 for truck in self.routes if len(truck.route) <= 3)  # Depot + 1 or 2 customers
+        underutilization_penalty = gamma * underutilized_trucks
+
+        return alpha * num_trucks + beta * total_distance + underutilization_penalty
 
     def calculate_distance(self):
         return sum(truck.calculate_route_distance(self.customers) for truck in self.routes)
@@ -318,8 +352,9 @@ class SimulatedAnnealing:
             # Cool down
             self.temperature *= self.cooling_rate
             iteration += 1
+            active_trucks = len([truck for truck in self.best_solution.routes if len(truck.route) > 2])
             print(
-                f"Iteration {iteration}: Temperature {self.temperature:.4f}, Best Cost {self.best_solution.calculate_distance()}")
+                f"Iteration {iteration}: Temperature {self.temperature:.4f}, Best Cost {self.best_solution.calculate_cost()}, Active Trucks: {active_trucks}")
 
         return self.best_solution
 
@@ -351,11 +386,6 @@ def plot_routes(solution: VRPTWSolution, customers: list[Customer], filename: st
         # Plot the customers with the same color
         for stop in truck.route[1:-1]:  # Exclude depot (start and end)
             plt.scatter(customers[stop].x, customers[stop].y, color=color, zorder=5)
-
-
-
-
-
 
     # Overlay an SVG for the depot
     depot_image = plt.imread(os.path.join(projectRoot, "src", "warehouse-10-512.png"))
@@ -403,6 +433,17 @@ def load_conditions(file_path: str):
 
     return list(map(int, lines[4].split()))
 
+def isBestSolutionValid(best_solution: VRPTWSolution):
+    """
+    Check if the best solution is valid by ensuring all routes are feasible.
+    :param best_solution: VRPTWSolution object representing the best solution
+    :return: bool True if the solution is valid, otherwise False
+    """
+    for truck in best_solution.routes:
+        if not best_solution.is_feasible_route(truck.route):
+            return False
+    return True
+
 # Main Execution
 if __name__ == "__main__":
     filename = ("rc201.txt")
@@ -412,8 +453,8 @@ if __name__ == "__main__":
     initial_solution = VRPTWSolution(customers, truck_capacity=conditions[1], max_trucks=conditions[0], depot=customers[0])  # Initialize solution
     sa = SimulatedAnnealing(
         initial_solution=initial_solution,
-        initial_temperature=10000.0,  # Higher -> More exploration, but risk of accepting worse solutions
-        cooling_rate=0.9,  # Higher -> Faster convergence, but risk of local minima
+        initial_temperature=1000.0,  # Higher -> More exploration, but risk of accepting worse solutions
+        cooling_rate=0.99,  # Higher -> Faster convergence, but risk of local minima
         min_temperature=0.001  # Lower -> More iterations, but better results
 
     )
@@ -422,4 +463,5 @@ if __name__ == "__main__":
     for i in range(len(best_solution.routes)):
         print(f"Truck {i}: {best_solution.routes[i].route}")
     end_time = time.time()
+    print(f"Solution is valid: {isBestSolutionValid(best_solution)}")
     plot_routes(best_solution, customers, filename, initial_solution.calculate_distance(), best_solution.calculate_distance(), (end_time-start_time))  # Plot optimized routes
