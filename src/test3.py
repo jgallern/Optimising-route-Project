@@ -101,7 +101,7 @@ class Truck:
         return self.current_time + travel_time
 
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=None)  # Caches results to avoid redundant calculations
 def calculate_distance(c1: Customer, c2: Customer):
     """
     Calculate the Euclidean distance between two customers
@@ -159,6 +159,21 @@ class VRPTWSolution:
                 break  # All customers assigned
 
         return trucks
+
+    def validate_routes(self, routes):
+        """
+        Ensure all routes start and end with the depot and contain no duplicate depots.
+        """
+        depot_id = self.depot.id
+        for truck in routes:
+            # Ensure depot at start and end
+            if truck.route[0] != depot_id:
+                truck.route.insert(0, depot_id)
+            if truck.route[-1] != depot_id:
+                truck.route.append(depot_id)
+            # Remove duplicate depots
+            truck.route = [depot_id] + [c for c in truck.route[1:-1] if c != depot_id] + [depot_id]
+        return routes
 
     def neighbor_solution(self):
         """
@@ -241,16 +256,18 @@ class VRPTWSolution:
             longest_route = max(new_routes, key=lambda t: t.calculate_route_distance(self.customers))
             if len(longest_route.route) > 3:  # At least 2 deliveries to split
                 split_point = len(longest_route.route) // 2
-                new_truck.route = longest_route.route[split_point:]
+                # Create new route for the new truck
+                new_truck.route = [depot_id] + longest_route.route[split_point:] + [depot_id]
+                # Adjust the original truck's route
                 longest_route.route = longest_route.route[:split_point] + [depot_id]
 
                 # Validate routes after split
                 if self.is_feasible_route(new_truck.route) and self.is_feasible_route(longest_route.route):
                     new_routes.append(new_truck)
-                else:
-                    # Revert split if invalid
-                    longest_route.route += new_truck.route[1:]
-                    new_truck.route = [depot_id]
+            else:
+                # Revert split if invalid
+                longest_route.route += new_truck.route[1:-1]  # Exclude depot from the reverted merge
+                new_truck.route = [depot_id]
 
         elif strategy == "remove_empty_trucks":
             # Remove empty trucks
@@ -261,7 +278,7 @@ class VRPTWSolution:
             if not self.is_feasible_route(truck.route):
                 return self.routes  # Return current solution if invalid neighbor is generated
 
-        return new_routes
+        return self.validate_routes(new_routes)
 
     def is_feasible_route(self, route):
         """
@@ -325,7 +342,7 @@ class SimulatedAnnealing:
             return 1
         return exp(-delta / temperature)
 
-    def generate_and_evaluate_neighbor(self, current_cost):
+    def generate_and_evaluate_neighbor(self, alpha: int, beta: int, gamma: int):
         """
         Generate a neighbor solution and evaluate its cost.
         :param current_cost: INT Current solution cost.
@@ -339,10 +356,10 @@ class SimulatedAnnealing:
             self.current_solution.depot,
         )
         new_solution.routes = neighbor_routes
-        new_cost = new_solution.calculate_cost()
+        new_cost = new_solution.calculate_cost(alpha, beta, gamma)
         return new_solution, new_cost
 
-    def optimize(self, max_iterations=1000, num_workers=16):
+    def optimize(self, max_iterations=1000, num_workers=16, alpha=100, beta=1000, gamma=100):
         """
         Optimize the VRPTW problem using Simulated Annealing with parallel neighbor evaluation.
         :param max_iterations: INT Maximum iterations per temperature level.
@@ -356,7 +373,7 @@ class SimulatedAnnealing:
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
                 # Generate neighbors in parallel
-                futures = [executor.submit(self.generate_and_evaluate_neighbor, current_cost) for _ in
+                futures = [executor.submit(self.generate_and_evaluate_neighbor, alpha, beta, gamma) for _ in
                            range(max_iterations)]
                 for future in concurrent.futures.as_completed(futures):
                     neighbor, cost = future.result()
@@ -371,15 +388,14 @@ class SimulatedAnnealing:
             # Accept or reject the best neighbor
             if self.accept_probability(best_cost - current_cost, self.temperature) > random.random():
                 self.current_solution = best_neighbor
-                if best_cost < self.best_solution.calculate_cost():
+                if best_cost < self.best_solution.calculate_cost(alpha, beta, gamma):
                     self.best_solution = best_neighbor
-
             # Cool down
             self.temperature *= self.cooling_rate
             iteration += 1
             active_trucks = len([truck for truck in self.best_solution.routes if len(truck.route) > 2])
             print(
-                f"Iteration {iteration}: Temperature {self.temperature:.4f}, Best Cost {self.best_solution.calculate_cost()}, Active Trucks: {active_trucks}")
+                f"Iteration {iteration}: Temperature {self.temperature:.4f}, Best Cost {self.best_solution.calculate_cost(alpha, beta, gamma)}, Active Trucks: {active_trucks}")
 
         return self.best_solution
 
@@ -471,22 +487,35 @@ def isBestSolutionValid(best_solution: VRPTWSolution):
 
 # Main Execution
 if __name__ == "__main__":
-    filename = ("C1_10_1.TXT")
+    filename = ("r101.txt")
 
     customers = load_customers(os.path.join(projectRoot, "solomon_instances", filename))  # Load customer data
     conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", filename))  # Load conditions data
+
     initial_solution = VRPTWSolution(customers, truck_capacity=conditions[1], max_trucks=conditions[0], depot=customers[0])  # Initialize solution
+
     sa = SimulatedAnnealing(
         initial_solution=initial_solution,
         initial_temperature=1000.0,  # Higher -> More exploration, but risk of accepting worse solutions
         cooling_rate=0.99,  # Higher -> Faster convergence, but risk of local minima
         min_temperature=0.001  # Lower -> More iterations, but better results
-
     )
-    start_time = time.time()
-    best_solution = sa.optimize(max_iterations=50)  # Optimize solution
+
+    start_time = time.time()  # Timer start
+
+    best_solution = sa.optimize(
+        num_workers=16,  # Higher -> Faster evaluation, but more memory (set it to your computer's threads count)
+        max_iterations=50,  # Higher -> More exploration, but longer
+        alpha=100,  # Truck weight for cost calculation
+        beta=1000,  # Distance weight for cost calculation
+        gamma=100  # Underutilized truck weight for cost calculation
+    )
+
+    end_time = time.time()  # Timer end
+
+    # Print the optimized routes
     for i in range(len(best_solution.routes)):
         print(f"Truck {i}: {best_solution.routes[i].route}")
-    end_time = time.time()
-    print(f"Solution is valid: {isBestSolutionValid(best_solution)}")
+
+    # Plot the optimized routes
     plot_routes(best_solution, customers, filename, initial_solution.calculate_distance(), best_solution.calculate_distance(), (end_time-start_time))  # Plot optimized routes
