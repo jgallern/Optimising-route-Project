@@ -61,14 +61,20 @@ class Truck:
         """
         Check if the truck can visit the customer within time and capacity constraints.
         :param customer: The customer to visit next.
-        :param current_location: The current location of the truck.
+        :param current_location: The truck's current location.
         :return: True if visit is feasible, otherwise False.
         """
-        travel_time = calculate_distance(current_location, customer)
-        arrival_time = self.current_time + travel_time
+        arrival_time = self.calculate_arrival_time(current_location, customer)
+
+        # Check capacity constraint
+        if self.remaining_capacity < customer.demand:
+            return False
+
+        # Check time window constraint
         if arrival_time > customer.due_date:
-            return False  # Cannot arrive after due date
-        return self.remaining_capacity >= customer.demand
+            return False
+
+        return True
 
     def visit(self, customer: Customer, current_location: Customer):
         """
@@ -82,6 +88,16 @@ class Truck:
         self.current_time = max(arrival_time, customer.ready_time) + customer.service_time
         self.remaining_capacity -= customer.demand
         self.total_distance += travel_time
+
+    def calculate_arrival_time(self, current_location: Customer, customer: Customer):
+        """
+        Calculates the estimated arrival time at a customer location.
+        :param current_location: The current location of the truck (Customer object).
+        :param customer: The customer to visit next (Customer object).
+        :return: int estimated arrival time at the customer location.
+        """
+        travel_time = calculate_distance(current_location, customer)
+        return self.current_time + travel_time
 
 
 @lru_cache(maxsize=None)
@@ -102,7 +118,7 @@ class VRPTWSolution:
         :param customers: list[Customer] list of Customer objects
         :param truck_capacity: int capacity of the trucks
         :param max_trucks: int maximum number of trucks that can be used
-        :param depot: int ID of the depot location (customer 0)
+        :param depot: Customer object representing the depot location (customer 0)
         """
         self.customers = customers
         self.truck_capacity = truck_capacity
@@ -112,10 +128,11 @@ class VRPTWSolution:
 
     def generate_initial_solution(self):
         """
-        Generate an initial solution by prioritizing capacity utilization and minimizing trucks used.
+        Generate an initial solution by respecting constraints on capacity and time windows.
         """
-        unvisited = set(self.customers[1:])
+        unvisited = set(self.customers[1:])  # Exclude the depot
         trucks = []
+
         for truck_id in range(self.max_trucks):
             truck = Truck(truck_id, self.truck_capacity, self.depot.id)
             while unvisited:
@@ -125,172 +142,190 @@ class VRPTWSolution:
                 ]
                 if not feasible_customers:
                     break
-                # Sort by earliest due date to prioritize harder-to-fit customers
+
+                # Prioritize harder-to-visit customers (e.g., close due date, higher demand)
                 feasible_customers.sort(key=lambda c: (c.due_date, -c.demand))
                 best_customer = feasible_customers[0]
+
                 truck.visit(best_customer, current_location)
                 truck.route.append(best_customer.id)
                 unvisited.remove(best_customer)
+
             if len(truck.route) > 1:
-                truck.route.append(self.depot.id)
+                truck.route.append(self.depot.id)  # Return to depot
                 trucks.append(truck)
-                if not unvisited:
-                    break  # Stop if all customers are visited
+            if not unvisited:
+                break  # All customers assigned
+
         return trucks
-
-    def calculate_cost(self, alpha=1000, beta=1):
-        """
-        Calculate the cost of the solution with high emphasis on minimizing the number of trucks.
-        :param alpha: INT weight for the number of trucks
-        :param beta: INT weight for the total distance
-        :return: INT cost of the solution
-        """
-        num_trucks = len(self.routes)
-        total_distance = sum(truck.calculate_route_distance(self.customers) for truck in self.routes)
-        return alpha * num_trucks + beta * total_distance
-
-    def calculate_total_distance(self):
-        """
-        Calculate the total distance of the solution by summing the distance of each truck's route.
-        :return: int total distance of the solution
-        """
-        return sum(truck.calculate_route_distance(self.customers) for truck in self.routes)
 
     def neighbor_solution(self):
         """
-        Generate a neighbor solution by modifying routes and ensuring time window constraints are respected.
+        Generates a neighbor solution with multiple strategies for exploration.
+        Ensures that all generated routes are feasible with respect to capacity and time windows.
         """
         new_routes = [Truck(t.id, t.capacity, t.route[0]) for t in self.routes]
         for i, truck in enumerate(self.routes):
             new_routes[i].route = truck.route[:]
             new_routes[i].remaining_capacity = truck.remaining_capacity
 
-        # Attempt to merge or modify routes
-        if len(new_routes) > 1 and random.random() < 0.5:  # 50% chance to merge routes
+        # Choose a strategy for neighbor generation
+        strategy = random.choice(["merge_routes", "swap_between_routes", "reorder_within_route", "move_customer"])
+        depot_id = self.depot.id  # To simplify adding/removing depots
+
+        if strategy == "merge_routes" and len(new_routes) > 1:
+            # Merge two routes
             truck1, truck2 = random.sample(new_routes, 2)
-            if len(truck2.route) > 2:  # Ensure truck2 has customers to move
-                for customer_id in truck2.route[1:-1]:  # Exclude depot
-                    customer = self.customers[customer_id]
-                    if truck1.remaining_capacity >= customer.demand:
-                        current_location = self.customers[truck1.route[-1]]
-                        if truck1.can_visit(customer, current_location):
-                            truck2.route.remove(customer_id)
-                            truck1.route.insert(-1, customer_id)
-                            truck1.remaining_capacity -= customer.demand
-                            truck2.remaining_capacity += customer.demand
+            combined_route = truck1.route[:-1] + truck2.route[1:-1]  # Merge routes, excluding depots
 
-        else:  # Apply a 2-Opt move within a single route
-            selected_truck = random.choice(new_routes)
-            if len(selected_truck.route) > 3:
-                i, j = sorted(random.sample(range(1, len(selected_truck.route) - 1), 2))
-                selected_truck.route[i:j] = reversed(selected_truck.route[i:j])
+            # Check feasibility
+            if self.is_feasible_route(combined_route):
+                truck1.route = combined_route + [depot_id]
+                truck2.route = [depot_id]  # Empty truck2
+                truck2.remaining_capacity = truck2.capacity
 
-        # Validate all routes for time window constraints
+        elif strategy == "swap_between_routes" and len(new_routes) > 1:
+            # Swap customers between routes
+            truck1, truck2 = random.sample(new_routes, 2)
+            if len(truck1.route) > 2 and len(truck2.route) > 2:  # Ensure both have customers
+                customer1 = random.choice(truck1.route[1:-1])  # Exclude depots
+                customer2 = random.choice(truck2.route[1:-1])
+
+                # Temporarily swap customers
+                truck1.route.remove(customer1)
+                truck2.route.remove(customer2)
+                truck1.route.insert(-1, customer2)
+                truck2.route.insert(-1, customer1)
+
+                # Validate both routes
+                if not (self.is_feasible_route(truck1.route) and self.is_feasible_route(truck2.route)):
+                    # Revert changes if invalid
+                    truck1.route.remove(customer2)
+                    truck2.route.remove(customer1)
+                    truck1.route.insert(-1, customer1)
+                    truck2.route.insert(-1, customer2)
+
+        elif strategy == "reorder_within_route":
+            # Reorder customers within a single route (2-opt)
+            truck = random.choice(new_routes)
+            if len(truck.route) > 3:  # At least 3 nodes for meaningful reordering
+                i, j = sorted(random.sample(range(1, len(truck.route) - 1), 2))  # Exclude depots
+                new_route = truck.route[:i] + truck.route[i:j + 1][::-1] + truck.route[j + 1:]
+
+                # Validate the reordered route
+                if self.is_feasible_route(new_route):
+                    truck.route = new_route
+
+        elif strategy == "move_customer" and len(new_routes) > 1:
+            # Move a customer from one route to another
+            truck1, truck2 = random.sample(new_routes, 2)
+            if len(truck1.route) > 2:  # Ensure truck1 has customers to move
+                customer = random.choice(truck1.route[1:-1])  # Exclude depot
+                truck1.route.remove(customer)
+                truck2.route.insert(-1, customer)  # Add to truck2
+
+                # Validate both routes
+                if not (self.is_feasible_route(truck1.route) and self.is_feasible_route(truck2.route)):
+                    # Revert changes if invalid
+                    truck2.route.remove(customer)
+                    truck1.route.insert(-1, customer)
+
+        # Ensure all routes are feasible before returning
         for truck in new_routes:
-            if not self.validate_time_windows(truck):
-                return self.routes  # Revert to the previous solution if invalid
+            if not self.is_feasible_route(truck.route):
+                return self.routes  # Return current solution if invalid neighbor is generated
 
         return new_routes
 
-    def validate_time_windows(self, truck):
+    def is_feasible_route(self, route):
         """
-        Validate the time windows for a single truck's route.
-        :param truck: Truck object whose route needs to be validated.
-        :return: True if all time windows are respected, False otherwise.
+        Check if a route is feasible with respect to time windows and capacity constraints.
         """
+        current_capacity = 0
         current_time = 0
-        for i in range(len(truck.route) - 1):
-            current_location = self.customers[truck.route[i]]
-            next_customer = self.customers[truck.route[i + 1]]
+        current_customer = self.depot
 
-            travel_time = calculate_distance(current_location, next_customer)
+        for customer_id in route[1:]:  # Skip the depot
+            customer = self.customers[customer_id]
+            current_capacity += customer.demand
+            travel_time = calculate_distance(current_customer, customer)
             arrival_time = current_time + travel_time
 
-            # Check if arrival time respects the time window
-            if arrival_time > next_customer.due_date:
-                return False  # Cannot arrive after due date
-            current_time = max(arrival_time, next_customer.ready_time) + next_customer.service_time
+            if current_capacity > self.truck_capacity or arrival_time > customer.due_date:
+                return False
+
+            current_time = max(arrival_time, customer.ready_time) + customer.service_time
+            current_customer = customer
 
         return True
 
+    def calculate_cost(self, alpha=10, beta=100):
+        """
+        Calculate the cost of the solution with weights on minimizing trucks and distance.
+        """
+        num_trucks = len([truck for truck in self.routes if len(truck.route) > 2])  # Exclude empty trucks
+        total_distance = sum(truck.calculate_route_distance(self.customers) for truck in self.routes)
+        return alpha * num_trucks + beta * total_distance
+
+    def calculate_distance(self):
+        return sum(truck.calculate_route_distance(self.customers) for truck in self.routes)
 
 # Simulated Annealing
 class SimulatedAnnealing:
-    def __init__(self, initial_solution: VRPTWSolution, customers: list[Customer], depot: Customer, initial_temperature=1000, cooling_rate=0.995, min_temperature=1e-3, max_passes=10):
+    def __init__(self, initial_solution: VRPTWSolution, initial_temperature=1000.0, cooling_rate=0.995, min_temperature=1e-3):
         """
-        Initialize the Simulated Annealing algorithm with the given parameters.
-        :param initial_solution: VRPTWSolution object representing the initial solution
-        :param customers: list[Customer] list of Customer objects
-        :param depot: int ID of the depot location (customer 0)
-        :param initial_temperature: int initial temperature of the system
-        :param cooling_rate: float cooling rate of the system
-        :param min_temperature: float minimum temperature of the system
+        Initialize the Simulated Annealing algorithm.
         """
         self.current_solution = initial_solution
         self.best_solution = initial_solution
-        self.customers = customers
-        self.depot = depot
         self.temperature = initial_temperature
         self.cooling_rate = cooling_rate
         self.min_temperature = min_temperature
-        self.max_passes = max_passes
 
     def accept_probability(self, delta, temperature):
         """
-        Calculate the probability of accepting a worse solution based on the temperature and the change in cost (delta).
-        :param delta: change in cost between the new and current solution
-        :param temperature: current temperature of the system (higher temperature allows for worse solutions to be accepted)
-        :return: int / float probability of accepting the worse solution
+        Calculate the probability of accepting a worse solution.
         """
         if delta < 0:
             return 1
         return exp(-delta / temperature)
 
-    def optimize(self):
+    def optimize(self, max_iterations=1000):
         """
-        Optimize the VRPTW problem using Simulated Annealing to minimize the number of trucks used and the total distance traveled.
-        :return: VRPTWSolution object representing the best solution found
+        Optimize the VRPTW problem using Simulated Annealing.
         """
-        for pass_num in range(self.max_passes):
-            start_time = time.time()
-            self.temperature = 1000  # Reset the temperature for each pass
-            while self.temperature > self.min_temperature:
-                try:
-                    # Generate a new neighbor solution
-                    new_routes = self.current_solution.neighbor_solution()
-                    new_solution = VRPTWSolution(self.customers, self.current_solution.truck_capacity,
-                                                 self.current_solution.max_trucks, self.depot)
-                    new_solution.routes = new_routes
+        iteration = 0
+        while self.temperature > self.min_temperature:
+            for _ in range(max_iterations):
+                # Generate a neighbor solution
+                neighbor_routes = self.current_solution.neighbor_solution()
+                new_solution = VRPTWSolution(self.current_solution.customers,
+                                             self.current_solution.truck_capacity,
+                                             self.current_solution.max_trucks,
+                                             self.current_solution.depot)
+                new_solution.routes = neighbor_routes
 
-                    # Validate capacity constraints
-                    for truck in new_solution.routes:
-                        used_capacity = sum(self.customers[stop].demand for stop in truck.route[1:-1])  # Exclude depot
-                        if used_capacity > truck.capacity:
-                            raise ValueError(f"Truck {truck.id} exceeds capacity after optimization step.")
+                # Calculate costs
+                current_cost = self.current_solution.calculate_cost()
+                new_cost = new_solution.calculate_cost()
 
-                    # Calculate costs
-                    current_cost = self.current_solution.calculate_cost()
-                    new_cost = new_solution.calculate_cost()
+                # Accept or reject the neighbor
+                if self.accept_probability(new_cost - current_cost, self.temperature) > random.random():
+                    self.current_solution = new_solution
+                    if new_cost < self.best_solution.calculate_cost():
+                        self.best_solution = new_solution
 
-                    # Accept or reject the new solution
-                    if self.accept_probability(new_cost - current_cost, self.temperature) > random.random():
-                        self.current_solution = new_solution
-                        if new_cost < self.best_solution.calculate_cost():
-                            self.best_solution = new_solution
-
-                    self.temperature *= self.cooling_rate
-
-
-                except ValueError as e:
-                    # Log and skip invalid solutions
-                    print(f"Skipping invalid solution: {e}")
-
-            print(f"Pass {pass_num + 1}/{self.max_passes} [{time.time() - start_time:.2f}s]")
+            # Cool down
+            self.temperature *= self.cooling_rate
+            iteration += 1
+            print(
+                f"Iteration {iteration}: Temperature {self.temperature:.4f}, Best Cost {self.best_solution.calculate_distance()}")
 
         return self.best_solution
 
+
 # Visualization
-def plot_routes(solution: VRPTWSolution, customers: list[Customer], filename: str, initial_cost: float, optimized_cost: float, maxpasses: int, opttime: float):
+def plot_routes(solution: VRPTWSolution, customers: list[Customer], filename: str, inicost: float, optcost: float, opttime: float):
     """
     Plot the optimized truck routes on a 2D graph with the customers and depot locations shown.
     :param solution: VRPTWSolution object representing the optimized solution
@@ -318,6 +353,10 @@ def plot_routes(solution: VRPTWSolution, customers: list[Customer], filename: st
             plt.scatter(customers[stop].x, customers[stop].y, color=color, zorder=5)
 
 
+
+
+
+
     # Overlay an SVG for the depot
     depot_image = plt.imread(os.path.join(projectRoot, "src", "warehouse-10-512.png"))
     imagebox = OffsetImage(depot_image, zoom=0.04)  # Adjust zoom for size
@@ -325,7 +364,9 @@ def plot_routes(solution: VRPTWSolution, customers: list[Customer], filename: st
     plt.gca().add_artist(ab)
 
     # Add the initial cost, the optimized cost and the total number of passes to the plot as text below the graph & legend
-    plt.text(0.5, -0.1, f"Initial Cost: {initial_cost:.2f}\nOptimized Cost [{maxpasses} passes - {opttime:.2f}s]: {optimized_cost:.2f} ", horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes)
+    plt.text(0.5, -0.1,
+             f"Initial Cost: {inicost:.2f}\nOptimized Cost [{opttime:.2f}s]: {optcost:.2f} ",
+             horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes)
 
     # Add legend and labels
     plt.legend()
@@ -364,16 +405,21 @@ def load_conditions(file_path: str):
 
 # Main Execution
 if __name__ == "__main__":
-    filename = "rc201.txt"
-    maxpasses = 10
+    filename = ("rc201.txt")
 
     customers = load_customers(os.path.join(projectRoot, "solomon_instances", filename))  # Load customer data
     conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", filename))  # Load conditions data
     initial_solution = VRPTWSolution(customers, truck_capacity=conditions[1], max_trucks=conditions[0], depot=customers[0])  # Initialize solution
-    sa = SimulatedAnnealing(initial_solution, customers, customers[0], max_passes=maxpasses)  # Initialize Simulated Annealing
+    sa = SimulatedAnnealing(
+        initial_solution=initial_solution,
+        initial_temperature=10000.0,  # Higher -> More exploration, but risk of accepting worse solutions
+        cooling_rate=0.9,  # Higher -> Faster convergence, but risk of local minima
+        min_temperature=0.001  # Lower -> More iterations, but better results
+
+    )
     start_time = time.time()
-    best_solution = sa.optimize()  # Optimize solution
+    best_solution = sa.optimize(max_iterations=50)  # Optimize solution
     for i in range(len(best_solution.routes)):
         print(f"Truck {i}: {best_solution.routes[i].route}")
     end_time = time.time()
-    plot_routes(best_solution, customers, filename, initial_solution.calculate_total_distance(), best_solution.calculate_total_distance(), maxpasses, (end_time-start_time))  # Plot optimized routes
+    plot_routes(best_solution, customers, filename, initial_solution.calculate_distance(), best_solution.calculate_distance(), (end_time-start_time))  # Plot optimized routes
