@@ -471,7 +471,7 @@ def isBestSolutionValid(best_solution: VRPTWSolution):
 
 # Main Execution
 if __name__ == "__main__":
-    filename = ("c109.txt")
+    filename = ("C1_10_1.TXT")
 
     customers = load_customers(os.path.join(projectRoot, "solomon_instances", filename))  # Load customer data
     conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", filename))  # Load conditions data
