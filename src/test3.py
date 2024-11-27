@@ -449,6 +449,14 @@ class SimulatedAnnealing:
             "active_trucks_counts": active_trucks_counts,
         }
 
+        # Check for truck routes that are only [0, 0] and remove them
+        self.best_solution.routes = [truck for truck in self.best_solution.routes if len(truck.route) > 2]
+        # Reorder the truck IDs to start from 0 and be continuous
+        for i, truck in enumerate(self.best_solution.routes):
+            truck.id = i
+
+
+
         return self.best_solution
 
 
@@ -465,6 +473,7 @@ def plot_routes(solution: VRPTWSolution, customers: list[Customer], parameters: 
 
     # Generate distinct colors for routes
     colors = plt.cm.tab20(np.linspace(0, 1, len(solution.routes)))
+
 
     for truck, color in zip(solution.routes, colors):
         # Calculate used capacity before starting
