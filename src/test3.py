@@ -111,21 +111,37 @@ def calculate_distance(c1: Customer, c2: Customer):
     """
     return sqrt((c1.x - c2.x) ** 2 + (c1.y - c2.y) ** 2)
 
+
 # Solution Class
 class VRPTWSolution:
-    def __init__(self, customers: list[Customer], truck_capacity: int, max_trucks: int, depot: Customer):
+    def __init__(self, customers: list[Customer], truck_capacity: int, max_trucks: int, depot: Customer, temperature: float,
+                 initial_temperature: float):
         """
         Initialize a VRPTWSolution object with the given attributes for the VRPTW problem.
         :param customers: list[Customer] list of Customer objects
         :param truck_capacity: int capacity of the trucks
         :param max_trucks: int maximum number of trucks that can be used
         :param depot: Customer object representing the depot location (customer 0)
+        :param temperature: Current temperature of the SA.
+        :param initial_temperature: Initial temperature of the SA.
         """
         self.customers = customers
         self.truck_capacity = truck_capacity
         self.max_trucks = max_trucks
         self.depot = depot
+        self.temperature = temperature
+        self.initial_temperature = initial_temperature
         self.routes = self.generate_initial_solution()
+
+    def calculate_remove_truck_weight(self, temperature, initial_temperature):
+        """
+        Calculate the weight for the 'remove_truck' strategy based on the current temperature.
+        :param temperature: Current temperature of the SA.
+        :param initial_temperature: Initial temperature of the SA.
+        :return: Weight for the 'remove_truck' strategy.
+        """
+        return 5 * (temperature / initial_temperature)
+
 
     def generate_initial_solution(self):
         """
@@ -177,19 +193,22 @@ class VRPTWSolution:
 
     def neighbor_solution(self):
         """
-        Generates a neighbor solution with strategies for adding/removing trucks and balancing routes.
-        Ensures all generated routes are feasible.
+        Generates a neighbor solution with strategies for adjusting truck numbers or balancing routes.
+        Ensures all generated routes are feasible and improves solution diversity.
         """
         new_routes = [Truck(t.id, t.capacity, t.route[0]) for t in self.routes]
         for i, truck in enumerate(self.routes):
             new_routes[i].route = truck.route[:]
             new_routes[i].remaining_capacity = truck.remaining_capacity
 
-        # Choose a strategy for neighbor generation
-        strategy = random.choice([
-            "merge_routes", "move_customer", "swap_between_routes",
-            "reorder_within_route", "add_truck", "remove_empty_trucks"
-        ])
+            # Choose a strategy for neighbor generation
+        remove_truck_weight = self.calculate_remove_truck_weight(self.temperature, self.initial_temperature)
+        strategy = random.choices(
+            ["merge_routes", "move_customer", "swap_between_routes", "reorder_within_route", "add_truck",
+             "remove_truck"],
+            weights=[1, 1, 1, 1, 1, remove_truck_weight],
+            k=1
+            )[0]
         depot_id = self.depot.id
 
         if strategy == "merge_routes" and len(new_routes) > 1:
@@ -250,28 +269,40 @@ class VRPTWSolution:
                     truck.route = new_route
 
         elif strategy == "add_truck" and len(new_routes) < self.max_trucks:
-            # Add a new truck if needed
+            # Add a new truck by splitting an existing route
             new_truck = Truck(len(new_routes), self.truck_capacity, depot_id)
             # Attempt to split the longest route
             longest_route = max(new_routes, key=lambda t: t.calculate_route_distance(self.customers))
             if len(longest_route.route) > 3:  # At least 2 deliveries to split
                 split_point = len(longest_route.route) // 2
-                # Create new route for the new truck
                 new_truck.route = [depot_id] + longest_route.route[split_point:] + [depot_id]
-                # Adjust the original truck's route
                 longest_route.route = longest_route.route[:split_point] + [depot_id]
 
                 # Validate routes after split
                 if self.is_feasible_route(new_truck.route) and self.is_feasible_route(longest_route.route):
                     new_routes.append(new_truck)
-            else:
-                # Revert split if invalid
-                longest_route.route += new_truck.route[1:-1]  # Exclude depot from the reverted merge
-                new_truck.route = [depot_id]
+                else:
+                    # Revert split if invalid
+                    longest_route.route += new_truck.route[1:-1]  # Exclude depot from revert
+                    new_truck.route = [depot_id]
 
-        elif strategy == "remove_empty_trucks":
-            # Remove empty trucks
-            new_routes = [truck for truck in new_routes if len(truck.route) > 2]
+        elif strategy == "remove_truck" and len(new_routes) > 1:
+            # Remove a random truck and redistribute its customers
+            truck_to_remove = random.choice([t for t in new_routes if len(t.route) > 2])  # Exclude empty trucks
+            removed_customers = truck_to_remove.route[1:-1]  # Exclude depots
+            new_routes.remove(truck_to_remove)
+
+            # Redistribute customers to other trucks
+            for customer_id in removed_customers:
+                customer = self.customers[customer_id]
+                for truck in new_routes:
+                    if truck.can_visit(customer, self.customers[truck.route[-1]]):
+                        truck.route.insert(-1, customer_id)
+                        break
+                else:
+                    # Revert if redistribution fails
+                    new_routes.append(truck_to_remove)
+                    break
 
         # Ensure all routes are feasible before returning
         for truck in new_routes:
@@ -331,6 +362,7 @@ class SimulatedAnnealing:
         self.current_solution = initial_solution
         self.best_solution = initial_solution
         self.temperature = initial_temperature
+        self.initial_temperature = initial_temperature
         self.cooling_rate = cooling_rate
         self.min_temperature = min_temperature
         self.plot_data = None
@@ -355,6 +387,8 @@ class SimulatedAnnealing:
             self.current_solution.truck_capacity,
             self.current_solution.max_trucks,
             self.current_solution.depot,
+            self.temperature,
+            self.initial_temperature
         )
         new_solution.routes = neighbor_routes
         new_cost = new_solution.calculate_cost(alpha, beta, gamma)
@@ -397,7 +431,7 @@ class SimulatedAnnealing:
                 self.current_solution = best_neighbor
                 if best_cost < self.best_solution.calculate_cost(alpha, beta, gamma):
                     self.best_solution = best_neighbor
-                    print(f"Iteration {iteration}: Temperature {self.temperature:.4f}, Best Cost {self.best_solution.calculate_cost(alpha, beta, gamma)}, Active Trucks: {len([truck for truck in self.best_solution.routes if len(truck.route) > 2])}")
+                    print(f"Iteration {iteration}: Temperature {self.temperature:.4f}, Best Cost {self.best_solution.calculate_distance()}, Active Trucks: {len([truck for truck in self.best_solution.routes if len(truck.route) > 2])}")
 
             # Store data for plotting
             temperatures.append(self.temperature)
@@ -441,7 +475,7 @@ def plot_routes(solution: VRPTWSolution, customers: list[Customer], parameters: 
         route_coords = np.array(route_coords)
 
         # Plot the route with a unique color
-        plt.plot(route_coords[:, 0], route_coords[:, 1], marker='o', color=color, label=f"Truck {truck.id} [{used_capacity}/{truck.capacity}]")
+        plt.plot(route_coords[:, 0], route_coords[:, 1], marker='o', color=color, label=f"Truck {truck.id+1} [{used_capacity}/{truck.capacity}]")
         # Plot the customers with the same color
         for stop in truck.route[1:-1]:  # Exclude depot (start and end)
             plt.scatter(customers[stop].x, customers[stop].y, color=color, zorder=5)
@@ -551,21 +585,21 @@ def load_conditions(file_path: str):
 if __name__ == "__main__":
 
     parameters = {
-        "filename": "r101.txt",
-        "initial_temperature": 1000.0,  # Higher -> More exploration, but risk of accepting worse solutions
-        "cooling_rate": 0.99,           # Higher -> Faster convergence, but risk of local minima
+        "filename": "c206.txt",         # Solomon instance filename
+        "initial_temperature": 10000.0,  # Higher -> More exploration, but risk of accepting worse solutions
+        "cooling_rate": 0.995,           # Higher -> Faster convergence, but risk of local minima
         "min_temperature": 0.001,       # Lower -> More iterations, but better results
         "max_iterations": 50,           # Higher -> More exploration, but longer runtime
-        "alpha": 100,                   # Higher -> More penalty for more trucks
-        "beta": 1000,                   # Higher -> More penalty for longer routes
-        "gamma": 100,                   # Higher -> More penalty for underutilized trucks
+        "alpha": 1,                   # Higher -> More penalty for more trucks
+        "beta": 10,                   # Higher -> More penalty for longer routes
+        "gamma": 0,                   # Higher -> More penalty for underutilized trucks
         "num_workers": 16               # Higher -> Faster evaluation (set it to your computer's threads count)
-    }
+        }
 
     customers = load_customers(os.path.join(projectRoot, "solomon_instances", parameters["filename"]))  # Load customer data
     conditions = load_conditions(os.path.join(projectRoot, "solomon_instances", parameters["filename"]))  # Load conditions data
 
-    initial_solution = VRPTWSolution(customers, truck_capacity=conditions[1], max_trucks=conditions[0], depot=customers[0])  # Initialize solution
+    initial_solution = VRPTWSolution(customers, truck_capacity=conditions[1], max_trucks=conditions[0], depot=customers[0], initial_temperature=parameters["initial_temperature"], temperature=parameters["initial_temperature"])  # Initialize solution
 
     sa = SimulatedAnnealing(
         initial_solution=initial_solution,
