@@ -594,7 +594,7 @@ def load_conditions(file_path: str):
 if __name__ == "__main__":
 
     parameters = {
-        "filename": "rc202 .txt",         # Solomon instance filename
+        "filename": "rc202.txt",         # Solomon instance filename
         "initial_temperature": 10000.0,  # Higher -> More exploration, but risk of accepting worse solutions
         "cooling_rate": 0.995,           # Higher -> Faster convergence, but risk of local minima
         "min_temperature": 0.001,       # Lower -> More iterations, but better results
