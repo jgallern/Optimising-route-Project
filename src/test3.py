@@ -594,14 +594,14 @@ def load_conditions(file_path: str):
 if __name__ == "__main__":
 
     parameters = {
-        "filename": "c206.txt",         # Solomon instance filename
+        "filename": "rc202 .txt",         # Solomon instance filename
         "initial_temperature": 10000.0,  # Higher -> More exploration, but risk of accepting worse solutions
         "cooling_rate": 0.995,           # Higher -> Faster convergence, but risk of local minima
         "min_temperature": 0.001,       # Lower -> More iterations, but better results
         "max_iterations": 50,           # Higher -> More exploration, but longer runtime
         "alpha": 1,                   # Higher -> More penalty for more trucks
         "beta": 10,                   # Higher -> More penalty for longer routes
-        "gamma": 0,                   # Higher -> More penalty for underutilized trucks
+        "gamma": 1,                   # Higher -> More penalty for underutilized trucks
         "num_workers": 16               # Higher -> Faster evaluation (set it to your computer's threads count)
         }
 
